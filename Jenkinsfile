@@ -5,8 +5,8 @@ pipeline {
   environment {
     // ---- registry + image naming ----
     REGISTRY_URL  = 'https://index.docker.io/v1/'
-    REGISTRY_CRED = 'dockerhub-creds'          // Jenkins credentials ID
-    IMAGE_NAME    = 'karakib2k18/eb-express-sample' // <--- change if needed
+    REGISTRY_CRED = 'dockerhub-creds'                    // Jenkins credentials ID
+    IMAGE_NAME    = 'kazirakib/eb-express-sample'        // <-- Docker Hub username/repo
   }
 
   options {
@@ -19,7 +19,7 @@ pipeline {
   stages {
 
     stage('Checkout') {
-      agent { label 'built-in' }               // lightweight checkout on controller
+      agent { label 'built-in' }                         // lightweight checkout on controller
       steps {
         checkout scm
         sh 'git log -1 --pretty=oneline || true'
