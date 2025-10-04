@@ -1,12 +1,10 @@
 pipeline {
-  // We’ll use stage-level agents:
   agent none
 
   environment {
-    // ---- registry + image naming ----
     REGISTRY_URL  = 'https://index.docker.io/v1/'
-    REGISTRY_CRED = 'dockerhub-creds'                    // Jenkins credentials ID
-    IMAGE_NAME    = 'kazirakib/eb-express-sample'        // <-- Docker Hub username/repo
+    REGISTRY_CRED = 'dockerhub-creds'             // Jenkins credentials ID
+    IMAGE_NAME    = 'kazirakib/eb-express-sample'  
   }
 
   options {
@@ -17,9 +15,8 @@ pipeline {
   }
 
   stages {
-
     stage('Checkout') {
-      agent { label 'built-in' }                         // lightweight checkout on controller
+      agent { label 'built-in' } // lightweight checkout
       steps {
         checkout scm
         sh 'git log -1 --pretty=oneline || true'
@@ -27,36 +24,35 @@ pipeline {
     }
 
     stage('Build & Test (Node 16)') {
-      // Requirement 1b-i: Node 16 Docker image as the build agent
+      // 1b-i: Node 16 Docker image as the build agent
       agent {
         docker {
           image 'node:16'
-          // run as root so npm can install global tools if needed
           args '-u 0:0'
         }
       }
       steps {
         sh '''
+          set -eux
           node --version
           npm --version
 
-          # Requirement 1b-ii: install dependencies via npm install --save
+          # 1b-ii: install dependencies as requested
           npm install --save
 
-          # Run unit tests (non-fatal for sample app; adjust to fail if you have real tests)
-          npm test || echo "No tests / tests failed (non-fatal for sample app)"
+          # Run tests (sample may have none; keep non-fatal if needed)
+          npm test || echo "Tests missing or failing (non-fatal for sample)"
         '''
       }
       post {
         always {
-          // collect any junit results if you generate them (optional)
           junit allowEmptyResults: true, testResults: 'reports/**/*.xml'
         }
       }
     }
 
-    stage('Dependency Scan (OWASP Dependency-Check)') {
-      // Uses Docker CLI on the controller to run the scanner
+    stage('Dependency Scan (OWASP DC)') {
+      // 2a: integrate dependency scanner
       agent { label 'built-in' }
       steps {
         sh '''
@@ -69,24 +65,23 @@ pipeline {
             -v "$PWD/depcheck":/report \
             owasp/dependency-check:latest \
             --scan /src \
-            --format "HTML" \
+            --format HTML \
             --out /report \
             --enableRetired
 
-          # JSON report for programmatic evaluation
+          # JSON report for evaluation
           docker run --rm \
             -v "$PWD":/src \
             -v "$PWD/depcheck":/report \
             owasp/dependency-check:latest \
             --scan /src \
-            --format "JSON" \
+            --format JSON \
             --out /report \
             --enableRetired
 
-          # Fail build if High/Critical vulnerabilities are found
-          # (normalize severity text and count HIGH/CRITICAL)
+          # 2b: fail pipeline if High/Critical found
           count=$(jq -r '
-            .dependencies[]
+            .dependencies[]? 
             | (.vulnerabilities // [])
             | map((.severity|tostring|ascii_upcase) | select(.==\"HIGH\" or .==\"CRITICAL\"))
             | length
@@ -102,7 +97,6 @@ pipeline {
       post {
         always {
           archiveArtifacts artifacts: 'depcheck/*', allowEmptyArchive: true
-          // If you have HTML Publisher installed, this will expose the report:
           script {
             try {
               publishHTML(target: [
@@ -119,7 +113,6 @@ pipeline {
     }
 
     stage('Build Docker Image') {
-      // Use controller for docker build/push to reach your DinD engine
       agent { label 'built-in' }
       steps {
         sh '''
@@ -147,11 +140,7 @@ pipeline {
   }
 
   post {
-    success {
-      echo "Pipeline finished successfully ✔"
-    }
-    failure {
-      echo "Pipeline failed. Check previous stage logs for details."
-    }
+    success { echo "Pipeline finished successfully ✔" }
+    failure { echo "Pipeline failed. See stage logs." }
   }
 }
