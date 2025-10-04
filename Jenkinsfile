@@ -12,7 +12,7 @@ pipeline {
     }
     
     environment {
-        DOCKER_IMAGE = 'ifthakharul/nodejs-app'
+        DOCKER_IMAGE = 'kazirakib/eb-express-sample'
         DOCKER_TAG = "${BUILD_NUMBER}"
     }
     
