@@ -5,23 +5,22 @@ pipeline {
             args '-v /var/run/docker.sock:/var/run/docker.sock -u root'
         }
     }
-    
+
     options {
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
-    
+
     environment {
         DOCKER_IMAGE = 'kazirakib/eb-express-sample'
-        DOCKER_TAG = "${BUILD_NUMBER}"
+        DOCKER_TAG   = "${BUILD_NUMBER}"
     }
-    
+
     stages {
         stage('Install Docker') {
             steps {
                 sh '''
                     echo "Installing Docker CLI..."
-                    # Download Docker CLI binary directly
                     curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-20.10.24.tgz -o docker.tgz
                     tar -xzf docker.tgz
                     mv docker/docker /usr/local/bin/
@@ -31,7 +30,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Install Dependencies') {
             steps {
                 echo 'Installing Node.js dependencies...'
@@ -41,7 +40,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Run Tests') {
             steps {
                 echo 'Running unit tests...'
@@ -55,49 +54,38 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Security Scan - Dependencies') {
             steps {
                 echo 'Running security audit on dependencies...'
                 script {
-                    def auditResult = sh(
-                        script: 'npm audit --json > audit-results.json || true',
-                        returnStatus: true
-                    )
-                    
+                    sh 'npm audit --json > audit-results.json || true'
                     sh '''
                         if [ -f audit-results.json ]; then
                             echo "Audit results:"
                             cat audit-results.json
-                            
-                            # Check for critical vulnerabilities
-                            CRITICAL=$(cat audit-results.json | grep -o '"critical":[0-9]*' | cut -d':' -f2 || echo "0")
-                            HIGH=$(cat audit-results.json | grep -o '"high":[0-9]*' | cut -d':' -f2 || echo "0")
-                            
+                            CRITICAL=$(grep -o '"critical":[0-9]*' audit-results.json | cut -d: -f2 || echo "0")
+                            HIGH=$(grep -o '"high":[0-9]*' audit-results.json | cut -d: -f2 || echo "0")
                             echo "Critical vulnerabilities: $CRITICAL"
                             echo "High vulnerabilities: $HIGH"
-                            
                             if [ "$CRITICAL" -gt 0 ]; then
                                 echo "CRITICAL vulnerabilities detected! Pipeline will fail."
                                 exit 1
                             fi
-                            
                             if [ "$HIGH" -gt 0 ]; then
                                 echo "WARNING: High vulnerabilities detected!"
                             fi
                         fi
                     '''
-                    
                     archiveArtifacts artifacts: 'audit-results.json', allowEmptyArchive: true
                 }
             }
         }
-        
+
         stage('Build Docker Image') {
             steps {
                 echo "Building Docker image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
                 script {
-                    // Create Dockerfile if it doesn't exist
                     sh '''
                         if [ ! -f Dockerfile ]; then
                             echo "Creating Dockerfile..."
@@ -131,8 +119,6 @@ CMD [ "npm", "start" ]
 EOF
                         fi
                     '''
-                    
-                    // Build the Docker image
                     sh """
                         docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
                         docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
@@ -141,7 +127,7 @@ EOF
                 }
             }
         }
-        
+
         stage('Image Security Scan') {
             steps {
                 echo 'Scanning Docker image for vulnerabilities...'
@@ -149,8 +135,8 @@ EOF
                     try {
                         sh """
                             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                                aquasec/trivy:latest image --severity HIGH,CRITICAL \
-                                ${DOCKER_IMAGE}:${DOCKER_TAG} || echo "Trivy scan completed with findings"
+                              aquasec/trivy:latest image --severity HIGH,CRITICAL \
+                              ${DOCKER_IMAGE}:${DOCKER_TAG} || echo "Trivy scan completed with findings"
                         """
                     } catch (Exception e) {
                         echo "Image security scan completed: ${e.message}"
@@ -158,30 +144,33 @@ EOF
                 }
             }
         }
-        
+
+        /* --------- UPDATED: actually push to Docker Hub --------- */
         stage('Push to Registry') {
             steps {
-                echo 'Preparing to push Docker image...'
-                script {
+                echo 'Pushing Docker image to Docker Hub...'
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                                 usernameVariable: 'DOCKER_USER',
+                                                 passwordVariable: 'DOCKER_PASS')]) {
                     sh """
-                        echo "Docker image ready: ${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        echo "To push to Docker Hub, configure Docker Hub credentials in Jenkins"
-                        # Uncomment below when Docker Hub credentials are configured:
-                        # docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        # docker push ${DOCKER_IMAGE}:latest
+                        set -eux
+                        echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+                        docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
+                        docker push ${DOCKER_IMAGE}:latest
+                        docker logout || true
                     """
                 }
             }
         }
     }
-    
+
     post {
         always {
             echo 'Pipeline execution completed'
             sh 'docker images | grep ${DOCKER_IMAGE} || true'
         }
         success {
-            echo 'Pipeline succeeded! Docker image built successfully.'
+            echo 'Pipeline succeeded! Docker image built & pushed.'
         }
         failure {
             echo 'Pipeline failed! Check logs for details.'
